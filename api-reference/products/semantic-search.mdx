@@ -3,9 +3,11 @@ title: Semantic search
 description: Search products using natural language queries with AI-powered recommendations
 ---
 
+## POST /products/search
+
 <RequestExample>
 ```bash
-curl -X POST https://api.example.com/products/search \
+curl -X POST http://localhost:8000/products/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "I need a laptop for programming",

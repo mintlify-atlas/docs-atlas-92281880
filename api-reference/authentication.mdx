@@ -5,11 +5,15 @@ description: Authenticate users and obtain JWT access tokens for API requests
 
 The authentication system uses JWT (JSON Web Tokens) to secure API endpoints. Obtain an access token by logging in with valid credentials.
 
-## Login
+<Note>
+  Test credentials: username `admin`, password `admin123`
+</Note>
+
+## POST /auth/login
 
 <RequestExample>
 ```bash
-curl -X POST https://api.example.com/auth/login \
+curl -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin123"
 ```
@@ -59,7 +63,7 @@ Authenticate a user and receive a JWT access token.
 Once you have obtained an access token, include it in the Authorization header for authenticated requests:
 
 ```bash
-curl -X POST https://api.example.com/products/ \
+curl -X POST http://localhost:8000/products/ \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "Product name", "description": "Description", "category": "Category"}'

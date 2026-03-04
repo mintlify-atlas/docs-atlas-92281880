@@ -3,9 +3,11 @@ title: Create product
 description: Create a new product with automatic semantic embedding generation
 ---
 
+## POST /products/
+
 <RequestExample>
 ```bash
-curl -X POST https://api.example.com/products/ \
+curl -X POST http://localhost:8000/products/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Laptop HP Pavilion 15",
