@@ -1,0 +1,70 @@
+{
+  "projectType": "api-service",
+  "projectName": "SKU Semantic Search",
+  "projectDescription": "FastAPI service for semantic product search using RAG, vector embeddings, and multi-LLM failover",
+  "theme": "aspen",
+  "primaryColor": "#039be5",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "installation"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/rag-pattern", "architecture/multi-llm-failover"]
+          },
+          {
+            "group": "Guides",
+            "pages": ["guides/environment-setup", "guides/database-setup", "guides/docker-deployment"]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": ["api-reference/authentication"]
+          },
+          {
+            "group": "Products",
+            "pages": ["api-reference/products/create-product", "api-reference/products/semantic-search"]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Resources",
+            "pages": ["development/configuration", "development/troubleshooting"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Semantic search using Google Gemini embeddings and pgvector",
+    "RAG (Retrieval-Augmented Generation) pattern for accurate product recommendations",
+    "Multi-LLM failover system (Gemini to Claude)",
+    "PostgreSQL with pgvector extension for vector similarity search",
+    "JWT-based authentication",
+    "Docker-ready deployment"
+  ],
+  "publicApiSurface": [
+    "POST /auth/register - Register new user",
+    "POST /auth/login - Authenticate and get JWT token",
+    "POST /products/ - Create product with automatic embedding generation",
+    "POST /products/search - Semantic search with AI recommendations",
+    "LLMService.get_embedding(text) - Generate vector embeddings",
+    "LLMService.generate_answer(query, context) - Generate AI responses with failover",
+    "ProductService.create_product(db, product_in) - Create product with embedding",
+    "ProductService.search_products(db, query, limit) - Vector similarity search"
+  ]
+}
