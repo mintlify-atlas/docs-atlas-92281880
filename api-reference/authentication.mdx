@@ -1,0 +1,70 @@
+---
+title: Authentication
+description: Authenticate users and obtain JWT access tokens for API requests
+---
+
+The authentication system uses JWT (JSON Web Tokens) to secure API endpoints. Obtain an access token by logging in with valid credentials.
+
+## Login
+
+<RequestExample>
+```bash
+curl -X POST https://api.example.com/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=admin123"
+```
+</RequestExample>
+
+Authenticate a user and receive a JWT access token.
+
+<ParamField body="username" type="string" required>
+  The username for authentication
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's password
+</ParamField>
+
+### Response
+
+<ResponseField name="access_token" type="string">
+  JWT access token for authenticating subsequent API requests
+</ResponseField>
+
+<ResponseField name="token_type" type="string">
+  The token type, always "bearer"
+</ResponseField>
+
+<ResponseExample>
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+</ResponseExample>
+
+### Error responses
+
+<ResponseExample>
+```json 401 Unauthorized
+{
+  "detail": "Usuario o contraseña incorrectos"
+}
+```
+</ResponseExample>
+
+## Using the access token
+
+Once you have obtained an access token, include it in the Authorization header for authenticated requests:
+
+```bash
+curl -X POST https://api.example.com/products/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Product name", "description": "Description", "category": "Category"}'
+```
+
+<Note>
+  Access tokens expire after a configured time period. When a token expires, you'll receive a 401 Unauthorized response and need to obtain a new token by logging in again.
+</Note>

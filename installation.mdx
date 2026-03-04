@@ -1,0 +1,321 @@
+---
+title: Installation
+description: Detailed installation instructions for SKU Semantic Search
+---
+
+## System requirements
+
+- **Python:** 3.11 or higher
+- **Docker:** 20.10 or higher (for PostgreSQL with pgvector)
+- **Docker Compose:** 2.0 or higher
+- **Memory:** At least 4GB RAM recommended
+- **Storage:** 2GB free space for Docker images and database
+
+## Installation methods
+
+<Tabs>
+  <Tab title="Local development">
+    ### Clone the repository
+
+    ```bash
+    git clone https://github.com/your-username/sku-semantic-search.git
+    cd sku-semantic-search
+    ```
+
+    ### Create a virtual environment
+
+    <CodeGroup>
+    ```bash Linux/macOS
+    python -m venv venv
+    source venv/bin/activate
+    ```
+
+    ```bash Windows (Command Prompt)
+    python -m venv venv
+    .\venv\Scripts\activate
+    ```
+
+    ```bash Windows (PowerShell)
+    python -m venv venv
+    .\venv\Scripts\Activate.ps1
+    ```
+    </CodeGroup>
+
+    ### Install dependencies
+
+    ```bash
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+    <Accordion title="View key dependencies">
+      The project uses these major dependencies:
+
+      ```txt
+      fastapi==0.134.0
+      uvicorn==0.41.0
+      sqlalchemy==2.0.47
+      psycopg2-binary==2.9.11
+      pgvector==0.4.2
+      google-generativeai==0.8.6
+      anthropic==0.84.0
+      python-jose==3.5.0
+      passlib==1.7.4
+      pydantic==2.12.5
+      pydantic-settings==2.13.1
+      ```
+
+      See [requirements.txt](https://github.com/your-username/sku-semantic-search/blob/main/requirements.txt) for the complete list.
+    </Accordion>
+
+    ### Set up PostgreSQL with pgvector
+
+    Start the database using Docker Compose:
+
+    ```bash
+    docker-compose up -d db
+    ```
+
+    Verify the database is running:
+
+    ```bash
+    docker ps
+    ```
+
+    You should see a container named `retail_rag_db` with status "Up" and "(healthy)".
+
+    ### Configure environment variables
+
+    Create a `.env` file in the project root:
+
+    ```bash
+    cp .env.example .env  # if you have an example file
+    # or create it manually
+    ```
+
+    Add the following configuration:
+
+    ```bash
+    PROJECT_NAME="SKU Semantic Search"
+    VERSION="1.0.0"
+    
+    # Database configuration
+    DATABASE_URL="postgresql://postgres:db_pass@localhost:5435/retail_rag"
+    
+    # AI provider API keys
+    GEMINI_API_KEY="your_gemini_api_key_here"
+    ANTHROPIC_API_KEY="your_anthropic_api_key_here"
+    
+    # JWT authentication
+    JWT_SECRET="your_very_secure_random_secret_key"
+    ALGORITHM="HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES=30
+    ```
+
+    <Warning>
+      Never commit your `.env` file to version control. Add it to `.gitignore` to prevent accidentally exposing your API keys.
+    </Warning>
+
+    ### Initialize the database
+
+    The database schema is automatically created when you first run the application:
+
+    ```bash
+    uvicorn app.main:app --reload
+    ```
+
+    The startup code in `app/main.py:8` creates the `pgvector` extension and all necessary tables:
+
+    ```python
+    def create_tables():
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+        Base.metadata.create_all(bind=engine)
+    ```
+
+    ### Seed sample data
+
+    Populate the database with sample products:
+
+    ```bash
+    python seed_data.py
+    ```
+
+    This script creates embeddings for each product and stores them in PostgreSQL.
+
+    <Note>
+      The seed script includes a 0.5-second delay between products to avoid hitting Google Gemini API rate limits.
+    </Note>
+  </Tab>
+
+  <Tab title="Docker (recommended)">
+    ### Prerequisites
+
+    Ensure Docker and Docker Compose are installed:
+
+    ```bash
+    docker --version
+    docker-compose --version
+    ```
+
+    ### Clone the repository
+
+    ```bash
+    git clone https://github.com/your-username/sku-semantic-search.git
+    cd sku-semantic-search
+    ```
+
+    ### Configure environment variables
+
+    Create a `.env` file with your API keys:
+
+    ```bash
+    GEMINI_API_KEY=your_gemini_api_key_here
+    ANTHROPIC_API_KEY=your_anthropic_api_key_here
+    ```
+
+    <Info>
+      The Docker Compose configuration automatically sets other environment variables. See [Docker deployment](/guides/docker-deployment) for details.
+    </Info>
+
+    ### Start all services
+
+    ```bash
+    docker-compose up -d
+    ```
+
+    This starts both the API server and PostgreSQL database.
+
+    ### Verify deployment
+
+    Check that both containers are running:
+
+    ```bash
+    docker-compose ps
+    ```
+
+    Expected output:
+    ```
+    NAME                IMAGE                    STATUS
+    retail_rag_api      sku-semantic-search_api  Up
+    retail_rag_db       pgvector/pgvector:pg16   Up (healthy)
+    ```
+
+    ### Access the API
+
+    The API is now available at:
+    - **API:** [http://localhost:8000](http://localhost:8000)
+    - **Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+    ### Seed data in Docker
+
+    Run the seed script inside the container:
+
+    ```bash
+    docker-compose exec api python seed_data.py
+    ```
+  </Tab>
+</Tabs>
+
+## Verify installation
+
+Test that everything is working:
+
+<Steps>
+  <Step title="Check API health">
+    ```bash
+    curl http://localhost:8000/
+    ```
+
+    Expected response:
+    ```json
+    {
+      "message": "API de Búsqueda Semántica de SKUs lista y Base de Datos conectada"
+    }
+    ```
+  </Step>
+
+  <Step title="Get authentication token">
+    ```bash
+    curl -X POST "http://localhost:8000/auth/login" \
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      -d "username=admin&password=admin123"
+    ```
+  </Step>
+
+  <Step title="Test semantic search">
+    Replace `YOUR_TOKEN` with the token from step 2:
+
+    ```bash
+    curl -X POST "http://localhost:8000/products/search" \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"query": "bebida refrescante", "limit": 3}'
+    ```
+
+    You should receive product recommendations with an AI-generated response.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Database connection error">
+    If you see `connection refused` errors:
+
+    1. Ensure PostgreSQL is running: `docker ps`
+    2. Check the port isn't already in use: `lsof -i :5435` (macOS/Linux)
+    3. Verify the `DATABASE_URL` in your `.env` file matches the Docker Compose configuration
+
+    The Docker Compose file exposes PostgreSQL on port 5435 (not the default 5432) to avoid conflicts:
+
+    ```yaml
+    ports:
+      - "5435:5432"
+    ```
+  </Accordion>
+
+  <Accordion title="Gemini API errors">
+    If you see embedding or generation errors:
+
+    1. Verify your API key is correct in `.env`
+    2. Check you haven't exceeded the free tier quota
+    3. Ensure your IP isn't blocked (try from a different network)
+
+    The system will automatically fall back to Claude if Gemini fails for generation, but embeddings always use Gemini.
+  </Accordion>
+
+  <Accordion title="Import errors after pip install">
+    If Python can't find the `app` module:
+
+    1. Ensure you're in the project root directory
+    2. Verify your virtual environment is activated
+    3. Try reinstalling: `pip install -r requirements.txt --force-reinstall`
+  </Accordion>
+
+  <Accordion title="Docker build fails">
+    If the Docker image won't build:
+
+    1. Ensure you have enough disk space: `docker system df`
+    2. Clean up old images: `docker system prune -a`
+    3. Check the Dockerfile for syntax errors
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Follow the quickstart guide to make your first API call
+  </Card>
+  <Card title="Environment setup" icon="gear" href="/guides/environment-setup">
+    Learn about all configuration options
+  </Card>
+  <Card title="Database setup" icon="database" href="/guides/database-setup">
+    Deep dive into PostgreSQL and pgvector configuration
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand how the system works
+  </Card>
+</CardGroup>

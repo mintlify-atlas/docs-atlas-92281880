@@ -1,0 +1,541 @@
+---
+title: Database setup
+description: Configure PostgreSQL with pgvector extension for vector similarity search
+---
+
+## Overview
+
+SKU Semantic Search uses PostgreSQL with the **pgvector** extension to store and search product embeddings. This setup enables efficient vector similarity search using SQL queries.
+
+## Why PostgreSQL + pgvector?
+
+<CardGroup cols={2}>
+  <Card title="Unified storage" icon="database">
+    Store both relational data (products, users) and vectors in one database. No separate vector database needed.
+  </Card>
+  <Card title="ACID compliance" icon="shield-check">
+    Full transactional support ensures data consistency across product updates and searches.
+  </Card>
+  <Card title="SQL interface" icon="code">
+    Use familiar SQL syntax with SQLAlchemy ORM. No need to learn new query languages.
+  </Card>
+  <Card title="Cost-effective" icon="dollar-sign">
+    No additional infrastructure or licensing costs. Works with standard PostgreSQL.
+  </Card>
+</CardGroup>
+
+## Docker setup (recommended)
+
+The easiest way to get PostgreSQL with pgvector is using the official Docker image.
+
+### Docker Compose configuration
+
+The project includes a complete Docker Compose setup (`docker-compose.yml:18`):
+
+```yaml
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: retail_rag_db
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=db_pass
+      - POSTGRES_DB=retail_rag
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+```
+
+**Key configuration:**
+
+- **Image:** `pgvector/pgvector:pg16` - PostgreSQL 16 with pgvector pre-installed
+- **Port mapping:** `5435:5432` - External port 5435 avoids conflicts with local PostgreSQL
+- **Persistent storage:** `postgres_data` volume preserves data across container restarts
+- **Health check:** Ensures database is ready before starting dependent services
+
+### Start the database
+
+<Steps>
+  <Step title="Start PostgreSQL">
+    ```bash
+    docker-compose up -d db
+    ```
+
+    This starts only the database service in detached mode.
+  </Step>
+
+  <Step title="Verify container is running">
+    ```bash
+    docker ps
+    ```
+
+    Expected output:
+    ```
+    CONTAINER ID   IMAGE                      STATUS                    PORTS
+    abc123         pgvector/pgvector:pg16     Up 30s (healthy)          0.0.0.0:5435->5432/tcp
+    ```
+
+    Wait for the `(healthy)` status before proceeding.
+  </Step>
+
+  <Step title="Test connection">
+    ```bash
+    docker exec -it retail_rag_db psql -U postgres -d retail_rag
+    ```
+
+    You should see the PostgreSQL prompt:
+    ```
+    psql (16.0)
+    Type "help" for help.
+
+    retail_rag=#
+    ```
+  </Step>
+
+  <Step title="Verify pgvector extension">
+    Inside the psql prompt:
+    ```sql
+    SELECT * FROM pg_extension WHERE extname = 'vector';
+    ```
+
+    If the extension isn't installed yet, it will be created automatically when the application starts.
+  </Step>
+</Steps>
+
+## Manual PostgreSQL setup
+
+If you prefer to use an existing PostgreSQL installation:
+
+<Tabs>
+  <Tab title="Ubuntu/Debian">
+    <Steps>
+      <Step title="Install PostgreSQL">
+        ```bash
+        sudo apt update
+        sudo apt install postgresql postgresql-contrib
+        ```
+      </Step>
+
+      <Step title="Install build dependencies">
+        ```bash
+        sudo apt install build-essential git postgresql-server-dev-16
+        ```
+      </Step>
+
+      <Step title="Clone and build pgvector">
+        ```bash
+        cd /tmp
+        git clone --branch v0.7.0 https://github.com/pgvector/pgvector.git
+        cd pgvector
+        make
+        sudo make install
+        ```
+      </Step>
+
+      <Step title="Create database">
+        ```bash
+        sudo -u postgres psql
+        ```
+
+        ```sql
+        CREATE DATABASE retail_rag;
+        CREATE USER sku_user WITH PASSWORD 'secure_password';
+        GRANT ALL PRIVILEGES ON DATABASE retail_rag TO sku_user;
+        \q
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="macOS">
+    <Steps>
+      <Step title="Install PostgreSQL with Homebrew">
+        ```bash
+        brew install postgresql@16
+        brew services start postgresql@16
+        ```
+      </Step>
+
+      <Step title="Install pgvector">
+        ```bash
+        brew install pgvector
+        ```
+      </Step>
+
+      <Step title="Create database">
+        ```bash
+        psql postgres
+        ```
+
+        ```sql
+        CREATE DATABASE retail_rag;
+        CREATE USER sku_user WITH PASSWORD 'secure_password';
+        GRANT ALL PRIVILEGES ON DATABASE retail_rag TO sku_user;
+        \q
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Windows">
+    <Steps>
+      <Step title="Install PostgreSQL">
+        1. Download PostgreSQL installer from [postgresql.org](https://www.postgresql.org/download/windows/)
+        2. Run the installer and follow the setup wizard
+        3. Note the superuser password you set
+      </Step>
+
+      <Step title="Install pgvector">
+        Download pre-built binaries from [pgvector releases](https://github.com/pgvector/pgvector/releases) and follow the Windows installation instructions.
+      </Step>
+
+      <Step title="Create database">
+        Open pgAdmin or use psql:
+        ```sql
+        CREATE DATABASE retail_rag;
+        CREATE USER sku_user WITH PASSWORD 'secure_password';
+        GRANT ALL PRIVILEGES ON DATABASE retail_rag TO sku_user;
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Database initialization
+
+The application automatically creates tables and enables the pgvector extension on startup (`app/main.py:8`):
+
+```python
+def create_tables():
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.commit()
+    Base.metadata.create_all(bind=engine)
+```
+
+**What happens:**
+1. Connects to PostgreSQL using `DATABASE_URL` from `.env`
+2. Creates the `vector` extension if not already present
+3. Creates all tables defined by SQLAlchemy models
+
+<Info>
+  The `IF NOT EXISTS` clause makes this operation idempotent - safe to run multiple times.
+</Info>
+
+## Product model and schema
+
+Products are stored with their embeddings in the `products` table (`app/models/product.py:5`):
+
+```python
+from sqlalchemy import Column, Integer, String, Text
+from pgvector.sqlalchemy import Vector
+from app.db.session import Base
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True, nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String, index=True)
+    
+    # Vector of 3072 dimensions for Gemini embeddings
+    embedding = Column(Vector(3072))
+```
+
+**Column details:**
+
+- `id`: Auto-incrementing primary key
+- `name`: Product name, indexed for fast lookups
+- `description`: Full product description
+- `category`: Product category, indexed for filtering
+- `embedding`: 3072-dimensional vector from Gemini's embedding model
+
+### Generated SQL
+
+SQLAlchemy creates this SQL:
+
+```sql
+CREATE TABLE products (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    description TEXT,
+    category VARCHAR,
+    embedding vector(3072)
+);
+
+CREATE INDEX ix_products_name ON products(name);
+CREATE INDEX ix_products_category ON products(category);
+```
+
+## Vector operations
+
+### Creating embeddings
+
+When a product is added, its embedding is generated and stored (`app/services/product_service.py:8`):
+
+```python
+@staticmethod
+def create_product(db: Session, product_in: ProductCreate):
+    # 1. Generate embedding from description
+    text_to_embed = f"{product_in.name}: {product_in.description}"
+    embedding = LLMService.get_embedding(text_to_embed)
+
+    # 2. Save to database
+    db_product = Product(
+        name=product_in.name,
+        description=product_in.description,
+        category=product_in.category,
+        embedding=embedding
+    )
+    db.add(db_product)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+```
+
+### Vector similarity search
+
+Searching uses cosine distance to find similar products (`app/services/product_service.py:26`):
+
+```python
+@staticmethod
+def search_products(db: Session, query: str, limit: int = 5):
+    # 1. Get query embedding
+    query_embedding = LLMService.get_embedding(query)
+    
+    # 2. Search using pgvector
+    products = db.query(Product).order_by(
+        Product.embedding.cosine_distance(query_embedding)
+    ).limit(limit).all()
+    
+    return products
+```
+
+**Distance functions:**
+
+- `cosine_distance`: Measures angular similarity (recommended for text)
+- `l2_distance`: Euclidean distance
+- `inner_product`: Dot product (for normalized vectors)
+
+<Tip>
+  Cosine distance is scale-invariant, making it ideal for embeddings where magnitude varies but direction matters.
+</Tip>
+
+## Performance optimization
+
+For large product catalogs, add vector indexes:
+
+### IVFFlat index
+
+Fast approximate search (recommended for 10,000+ products):
+
+```sql
+-- Create index with 100 lists
+CREATE INDEX ON products USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- Analyze table for better query planning
+ANALYZE products;
+```
+
+**Configuration:**
+- `lists`: Number of clusters (rule of thumb: `rows / 1000`)
+- Trade accuracy for speed
+- Requires `ANALYZE` after creation
+
+### HNSW index
+
+Higher recall, more storage (recommended for < 1M products):
+
+```sql
+CREATE INDEX ON products USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
+
+**Configuration:**
+- `m`: Max connections per layer (higher = better recall, more memory)
+- `ef_construction`: Build-time accuracy (higher = better index, slower builds)
+
+<AccordionGroup>
+  <Accordion title="When to use IVFFlat vs HNSW">
+    **IVFFlat:**
+    - Faster builds (good for frequently changing catalogs)
+    - Lower memory usage
+    - Slightly lower recall
+    - Best for 10K - 10M vectors
+
+    **HNSW:**
+    - Higher recall (more accurate results)
+    - Faster queries
+    - More memory intensive
+    - Best for < 1M vectors with stable catalogs
+  </Accordion>
+
+  <Accordion title="Index rebuild frequency">
+    **IVFFlat:** Rebuild when:
+    - Product count changes by >20%
+    - Search quality degrades
+    - Run: `REINDEX INDEX index_name;`
+
+    **HNSW:** More resilient to updates, rebuild only when:
+    - Adding bulk products (>50% growth)
+    - Major catalog changes
+  </Accordion>
+</AccordionGroup>
+
+## Database maintenance
+
+### Backup and restore
+
+<CodeGroup>
+```bash Backup
+# Backup entire database
+docker exec retail_rag_db pg_dump -U postgres retail_rag > backup.sql
+
+# Backup with compression
+docker exec retail_rag_db pg_dump -U postgres retail_rag | gzip > backup.sql.gz
+```
+
+```bash Restore
+# Restore from backup
+docker exec -i retail_rag_db psql -U postgres retail_rag < backup.sql
+
+# Restore compressed backup
+gunzip -c backup.sql.gz | docker exec -i retail_rag_db psql -U postgres retail_rag
+```
+</CodeGroup>
+
+### Monitoring
+
+```sql
+-- Check table size
+SELECT 
+    pg_size_pretty(pg_total_relation_size('products')) AS total_size,
+    pg_size_pretty(pg_relation_size('products')) AS table_size,
+    pg_size_pretty(pg_indexes_size('products')) AS indexes_size;
+
+-- Count products by category
+SELECT category, COUNT(*) FROM products GROUP BY category;
+
+-- Check for missing embeddings
+SELECT COUNT(*) FROM products WHERE embedding IS NULL;
+```
+
+### Vacuum and analyze
+
+```sql
+-- Reclaim space and update statistics
+VACUUM ANALYZE products;
+
+-- Full vacuum (locks table)
+VACUUM FULL products;
+```
+
+<Warning>
+  `VACUUM FULL` locks the table and can take significant time on large datasets. Run during maintenance windows.
+</Warning>
+
+## Connection pooling
+
+SQLAlchemy handles connection pooling automatically (`app/db/session.py:6`):
+
+```python
+engine = create_engine(settings.DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+For production, configure pool settings:
+
+```python
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_size=10,           # Number of persistent connections
+    max_overflow=20,        # Additional connections when pool is full
+    pool_timeout=30,        # Seconds to wait for connection
+    pool_recycle=3600,      # Recycle connections after 1 hour
+)
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="pgvector extension not found">
+    **Error:** `extension "vector" does not exist`
+
+    **Solution:**
+    1. Verify you're using the pgvector Docker image: `pgvector/pgvector:pg16`
+    2. For manual installations, check pgvector is installed: `SELECT * FROM pg_available_extensions WHERE name = 'vector';`
+    3. Ensure database user has `CREATE` privilege: `GRANT CREATE ON DATABASE retail_rag TO postgres;`
+  </Accordion>
+
+  <Accordion title="Connection refused">
+    **Error:** `psycopg2.OperationalError: could not connect to server`
+
+    **Solution:**
+    1. Check PostgreSQL is running: `docker ps`
+    2. Verify port in `DATABASE_URL` matches Docker config (5435 for external)
+    3. For Docker API, use service name `db` as host, not `localhost`
+    4. Check firewall rules allow connections to port 5435
+  </Accordion>
+
+  <Accordion title="Slow vector searches">
+    **Symptoms:** Queries take >1 second with 10,000+ products
+
+    **Solution:**
+    1. Create a vector index (IVFFlat or HNSW)
+    2. Run `ANALYZE products;` to update statistics
+    3. Increase `work_mem` for better sort performance:
+       ```sql
+       ALTER DATABASE retail_rag SET work_mem = '256MB';
+       ```
+    4. Consider sharding if you have millions of products
+  </Accordion>
+
+  <Accordion title="Dimension mismatch error">
+    **Error:** `dimension of vector must match`
+
+    **Cause:** Embedding dimension doesn't match model definition
+
+    **Solution:**
+    1. Ensure all embeddings use the same model (Gemini: 3072 dimensions)
+    2. If changing models, recreate embeddings:
+       ```sql
+       UPDATE products SET embedding = NULL;
+       ```
+    3. Re-run seed script to regenerate embeddings
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Environment setup" icon="gear" href="/guides/environment-setup">
+    Configure DATABASE_URL and other environment variables
+  </Card>
+  <Card title="Docker deployment" icon="docker" href="/guides/docker-deployment">
+    Deploy the complete stack with Docker Compose
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand how the database fits into the system
+  </Card>
+  <Card title="RAG pattern" icon="brain" href="/architecture/rag-pattern">
+    Learn how vector search powers RAG
+  </Card>
+</CardGroup>

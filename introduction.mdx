@@ -1,0 +1,105 @@
+---
+title: SKU Semantic Search
+description: FastAPI service for semantic product search using RAG, vector embeddings, and multi-LLM failover
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="Hero Dark"
+/>
+
+## Welcome to SKU Semantic Search
+
+SKU Semantic Search is a proof-of-concept FastAPI service that demonstrates how to build an intelligent product search system using **Retrieval-Augmented Generation (RAG)**, vector embeddings, and multi-LLM failover.
+
+Unlike traditional keyword-based search that requires exact matches, this system understands user **intent**. For example, searching for "something to clean the floor" will return relevant products like mops and cleaning solutions, even if those exact words aren't in the product descriptions.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card
+    title="Semantic search"
+    icon="magnifying-glass"
+    href="/architecture/overview"
+  >
+    Vector similarity search using Google Gemini embeddings and PostgreSQL pgvector extension
+  </Card>
+  <Card
+    title="RAG pattern"
+    icon="brain"
+    href="/architecture/rag-pattern"
+  >
+    Retrieval-Augmented Generation ensures AI recommendations are grounded in real product data
+  </Card>
+  <Card
+    title="Multi-LLM failover"
+    icon="shield-halved"
+    href="/architecture/multi-llm-failover"
+  >
+    Automatic failover from Google Gemini to Anthropic Claude if the primary provider is unavailable
+  </Card>
+  <Card
+    title="Docker deployment"
+    icon="docker"
+    href="/guides/docker-deployment"
+  >
+    Production-ready Docker Compose configuration with PostgreSQL and pgvector
+  </Card>
+</CardGroup>
+
+## How it works
+
+The system transforms text queries into 3072-dimensional vectors using Google Gemini's embedding model. These vectors are stored and searched using PostgreSQL's pgvector extension, which uses cosine distance to find the most semantically similar products.
+
+Once relevant products are retrieved, the RAG pattern feeds them as context to an LLM (Gemini or Claude), which generates a natural language recommendation based **only** on the retrieved products, eliminating hallucinations.
+
+<Info>
+  This project was built as a learning exercise to explore AI integrations, vector databases, and API development with Python.
+</Info>
+
+## Technology stack
+
+- **Backend:** FastAPI 0.134+, Python 3.13, SQLAlchemy 2.0
+- **Database:** PostgreSQL with pgvector extension
+- **AI providers:** Google Generative AI (Gemini), Anthropic (Claude)
+- **Authentication:** JWT-based with python-jose and passlib
+- **Deployment:** Docker and Docker Compose
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get a working example running in under 5 minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Detailed setup instructions for local development
+  </Card>
+  <Card
+    title="Architecture overview"
+    icon="sitemap"
+    href="/architecture/overview"
+  >
+    Understand how the system components work together
+  </Card>
+  <Card
+    title="Environment setup"
+    icon="gear"
+    href="/guides/environment-setup"
+  >
+    Configure environment variables and API keys
+  </Card>
+</CardGroup>

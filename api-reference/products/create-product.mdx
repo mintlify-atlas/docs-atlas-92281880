@@ -1,0 +1,76 @@
+---
+title: Create product
+description: Create a new product with automatic semantic embedding generation
+---
+
+<RequestExample>
+```bash
+curl -X POST https://api.example.com/products/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Laptop HP Pavilion 15",
+    "description": "15.6 inch laptop with Intel Core i5, 8GB RAM, 256GB SSD",
+    "category": "Electronics"
+  }'
+```
+</RequestExample>
+
+Create a new product in the database. The system automatically generates a 3072-dimensional semantic embedding vector using Google's Gemini AI model for the product's name and description.
+
+## Request body
+
+<ParamField body="name" type="string" required>
+  The product name
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Detailed description of the product. This is used along with the name to generate the semantic embedding for search.
+</ParamField>
+
+<ParamField body="category" type="string" required>
+  The product category (e.g., "Electronics", "Clothing", "Food")
+</ParamField>
+
+## Response
+
+<ResponseField name="id" type="integer">
+  Unique identifier for the created product
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The product name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  The product description
+</ResponseField>
+
+<ResponseField name="category" type="string">
+  The product category
+</ResponseField>
+
+<ResponseExample>
+```json 200 Success
+{
+  "id": 1,
+  "name": "Laptop HP Pavilion 15",
+  "description": "15.6 inch laptop with Intel Core i5, 8GB RAM, 256GB SSD",
+  "category": "Electronics"
+}
+```
+</ResponseExample>
+
+<Note>
+  The embedding vector is generated automatically in the background and stored in the PostgreSQL database with pgvector extension. You don't need to provide it in the request.
+</Note>
+
+## How embeddings work
+
+When you create a product:
+
+1. The system combines the product's `name` and `description`
+2. Sends the text to Google's Gemini embedding model
+3. Receives a 3072-dimensional vector representation
+4. Stores the vector in the database for semantic search
+
+This enables intelligent semantic search capabilities where users can search using natural language queries.

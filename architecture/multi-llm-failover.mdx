@@ -1,0 +1,402 @@
+---
+title: Multi-LLM failover
+description: Automatic provider failover for high availability in SKU Semantic Search
+---
+
+## Why multi-LLM failover?
+
+Relying on a single LLM provider creates several risks:
+
+<CardGroup cols={2}>
+  <Card title="Rate limits" icon="gauge-high">
+    Free tiers have strict quotas. Paid tiers can hit limits during traffic spikes.
+  </Card>
+  <Card title="Service outages" icon="circle-exclamation">
+    Even major providers experience downtime. Multi-provider setup ensures availability.
+  </Card>
+  <Card title="Geographic restrictions" icon="globe">
+    Some AI services are unavailable in certain regions or countries.
+  </Card>
+  <Card title="Cost optimization" icon="dollar-sign">
+    Route to cheaper providers when primary is unavailable or over budget.
+  </Card>
+</CardGroup>
+
+<Note>
+  This system implements a hierarchical failover pattern: Try Google Gemini models first, then fall back to Anthropic Claude if all Gemini attempts fail.
+</Note>
+
+## Failover architecture
+
+The `LLMService` class manages multiple providers and models in priority order (`app/services/llm_service.py:11`):
+
+```python
+class LLMService:
+    # Hierarchical configuration
+    LLM_CONFIG = [
+        {
+            "provider": "google",
+            "models": [
+                'models/gemini-2.5-flash',      # Fastest, try first
+                'models/gemini-flash-latest',   # Fallback 1
+                'models/gemini-2.5-pro'         # Fallback 2 (slower but more capable)
+            ]
+        },
+        {
+            "provider": "anthropic",
+            "models": [
+                'claude-3-haiku-20240307',      # Fast and cheap
+                'claude-3-5-sonnet-20240620'    # Most capable
+            ]
+        }
+    ]
+```
+
+**Failover order:**
+1. Gemini 2.5 Flash
+2. Gemini Flash Latest
+3. Gemini 2.5 Pro
+4. Claude 3 Haiku
+5. Claude 3.5 Sonnet
+
+<Tip>
+  Models are ordered by speed and cost. Fast, cheap models are tried first. Slower, more capable models are reserves.
+</Tip>
+
+## Implementation
+
+The `generate_answer` method iterates through providers and models until one succeeds (`app/services/llm_service.py:64`):
+
+```python
+@staticmethod
+def generate_answer(query: str, context: str) -> str:
+    prompt = (
+        f"Eres un analista de Listo ERP. Basado en este contexto:\n{context}\n\n"
+        f"Pregunta: {query}\nRespuesta profesional y breve:"
+    )
+
+    # Try each provider and model in sequence
+    for entry in LLMService.LLM_CONFIG:
+        provider = entry["provider"]
+        for model_name in entry["models"]:
+            try:
+                # Route to appropriate provider
+                if provider == "google":
+                    res = LLMService._call_google(model_name, prompt)
+                elif provider == "anthropic":
+                    res = LLMService._call_anthropic(model_name, prompt)
+                
+                # Success! Return with provider metadata
+                return f"[{provider.upper()} - {model_name}] {res}"
+            
+            except (APIStatusError, APIConnectionError) as e:
+                # Network or API errors - try next model
+                print(f"⚠️ Network/status error in {provider} ({model_name}): {e}")
+                continue 
+            except Exception as e:
+                # Other errors - try next model
+                print(f"❌ Unexpected error in {model_name}: {str(e)[:50]}")
+                continue
+
+    # All providers failed
+    return "Lo sentimos, el servicio de recomendaciones no está disponible."
+```
+
+**Key features:**
+
+- **Automatic retry:** If one model fails, immediately tries the next
+- **Error categorization:** Distinguishes network errors from other failures
+- **Graceful degradation:** Returns a user-friendly message if all providers fail
+- **Transparency:** Response includes which provider/model generated it
+
+## Provider implementations
+
+### Google Gemini
+
+```python
+@staticmethod
+def _call_google(model_name: str, prompt: str):
+    model = genai.GenerativeModel(model_name)
+    response = model.generate_content(prompt)
+    return response.text
+```
+
+Simple synchronous call to Google's Generative AI SDK.
+
+### Anthropic Claude
+
+```python
+@staticmethod
+def _call_anthropic(model_name: str, prompt: str):
+    message = anthropic_client.messages.create(
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+        model=model_name,
+    )
+    # Anthropic returns content as a list of blocks
+    return message.content[0].text
+```
+
+Uses Anthropic's Messages API with explicit token limits.
+
+<Warning>
+  Different providers have different response formats. The wrapper methods normalize these into consistent text strings.
+</Warning>
+
+## Error handling strategy
+
+The system catches specific exceptions to determine whether to retry:
+
+<AccordionGroup>
+  <Accordion title="APIStatusError">
+    **Cause:** HTTP 4xx/5xx errors from the API
+
+    **Examples:**
+    - 429 Too Many Requests (rate limit)
+    - 500 Internal Server Error
+    - 503 Service Unavailable
+
+    **Action:** Try next provider/model
+  </Accordion>
+
+  <Accordion title="APIConnectionError">
+    **Cause:** Network connectivity issues
+
+    **Examples:**
+    - DNS resolution failure
+    - Connection timeout
+    - SSL/TLS errors
+
+    **Action:** Try next provider/model
+  </Accordion>
+
+  <Accordion title="Generic Exception">
+    **Cause:** Unexpected errors
+
+    **Examples:**
+    - Invalid API key
+    - Malformed response
+    - JSON parsing errors
+
+    **Action:** Log error and try next provider/model
+  </Accordion>
+</AccordionGroup>
+
+## Failover example
+
+Let's trace a request where Gemini is rate-limited:
+
+<Steps>
+  <Step title="First attempt: Gemini 2.5 Flash">
+    ```python
+    res = LLMService._call_google('models/gemini-2.5-flash', prompt)
+    ```
+
+    **Result:** `APIStatusError: 429 Too Many Requests`
+
+    **Action:** Print warning, continue to next model
+  </Step>
+
+  <Step title="Second attempt: Gemini Flash Latest">
+    ```python
+    res = LLMService._call_google('models/gemini-flash-latest', prompt)
+    ```
+
+    **Result:** `APIConnectionError: Connection timeout`
+
+    **Action:** Print warning, continue to next model
+  </Step>
+
+  <Step title="Third attempt: Gemini 2.5 Pro">
+    ```python
+    res = LLMService._call_google('models/gemini-2.5-pro', prompt)
+    ```
+
+    **Result:** `APIStatusError: 503 Service Unavailable`
+
+    **Action:** All Google models failed, switch providers
+  </Step>
+
+  <Step title="Fourth attempt: Claude 3 Haiku">
+    ```python
+    res = LLMService._call_anthropic('claude-3-haiku-20240307', prompt)
+    ```
+
+    **Result:** Success!
+
+    **Return:** `"[ANTHROPIC - claude-3-haiku-20240307] Based on the context..."`
+  </Step>
+</Steps>
+
+The entire failover process is transparent to the calling code. From the endpoint's perspective:
+
+```python
+ai_recommendation = LLMService.generate_answer(search_data.query, context)
+```
+
+Always returns either a recommendation or a graceful failure message.
+
+## Configuration best practices
+
+<AccordionGroup>
+  <Accordion title="Model ordering strategy">
+    Order models by:
+
+    1. **Latency:** Faster models first for better UX
+    2. **Cost:** Cheaper models first to minimize expenses
+    3. **Capability:** Reserve powerful models for when cheaper ones fail
+
+    Example: Gemini Flash (fast, cheap) → Claude Haiku (fast, cheap) → Gemini Pro (slower, capable) → Claude Sonnet (most capable)
+  </Accordion>
+
+  <Accordion title="Timeout configuration">
+    The current implementation doesn't set explicit timeouts. Consider adding:
+
+    ```python
+    import httpx
+
+    # Configure Anthropic client with timeout
+    anthropic_client = Anthropic(
+        api_key=settings.ANTHROPIC_API_KEY,
+        timeout=httpx.Timeout(30.0, connect=5.0)
+    )
+    ```
+
+    This prevents hanging on slow providers.
+  </Accordion>
+
+  <Accordion title="Circuit breaker pattern">
+    For production systems, consider implementing circuit breakers:
+
+    - **Open:** After N consecutive failures, stop trying a provider temporarily
+    - **Half-open:** After cooldown period, try again
+    - **Closed:** Provider is working normally
+
+    This prevents wasting time on consistently failing providers.
+  </Accordion>
+
+  <Accordion title="Monitoring and alerting">
+    Track these metrics:
+
+    - **Provider success rate:** Percentage of requests handled by each provider
+    - **Failover frequency:** How often failover is triggered
+    - **Complete failure rate:** Requests where all providers failed
+    - **Latency by provider:** Response time distribution
+
+    Alert when:
+    - Primary provider success rate drops below 95%
+    - Complete failure rate exceeds 1%
+    - Latency exceeds thresholds
+  </Accordion>
+</AccordionGroup>
+
+## Adding new providers
+
+The system is designed for easy extension. To add OpenAI as a third provider:
+
+<Steps>
+  <Step title="Install SDK">
+    ```bash
+    pip install openai
+    ```
+  </Step>
+
+  <Step title="Add to configuration">
+    ```python
+    LLM_CONFIG = [
+        {"provider": "google", "models": [...]},
+        {"provider": "anthropic", "models": [...]},
+        {
+            "provider": "openai",
+            "models": ['gpt-4o-mini', 'gpt-4o']
+        }
+    ]
+    ```
+  </Step>
+
+  <Step title="Implement provider method">
+    ```python
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+    @staticmethod
+    def _call_openai(model_name: str, prompt: str):
+        response = openai_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024
+        )
+        return response.choices[0].message.content
+    ```
+  </Step>
+
+  <Step title="Add routing logic">
+    ```python
+    if provider == "google":
+        res = LLMService._call_google(model_name, prompt)
+    elif provider == "anthropic":
+        res = LLMService._call_anthropic(model_name, prompt)
+    elif provider == "openai":
+        res = LLMService._call_openai(model_name, prompt)
+    ```
+  </Step>
+
+  <Step title="Update environment variables">
+    ```bash
+    OPENAI_API_KEY="sk-..."
+    ```
+  </Step>
+</Steps>
+
+The failover logic automatically handles the new provider.
+
+## Embedding failover
+
+<Warning>
+  **Important limitation:** Currently, embeddings only use Google Gemini. If Gemini embeddings fail, the entire search fails.
+</Warning>
+
+Embeddings require consistency - you can't mix vectors from different models in the same search space. Options:
+
+1. **Accept the risk:** Gemini embeddings have high availability
+2. **Dual embedding storage:** Store embeddings from multiple models (increases storage)
+3. **Offline fallback:** Cache embeddings and serve stale results during Gemini outages
+
+## Testing failover
+
+To test failover behavior:
+
+```python
+# Temporarily break Gemini by using invalid API key
+import os
+os.environ['GEMINI_API_KEY'] = 'invalid_key'
+
+# Make a search request
+curl -X POST "http://localhost:8000/products/search" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "test", "limit": 3}'
+```
+
+You should see:
+- Console logs showing Gemini failures
+- Automatic failover to Claude
+- Response with `[ANTHROPIC - ...]` prefix
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="RAG pattern" icon="brain" href="/architecture/rag-pattern">
+    Understand how multi-LLM failover works with RAG
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    See how failover fits into the complete system
+  </Card>
+  <Card title="Environment setup" icon="gear" href="/guides/environment-setup">
+    Configure API keys for multiple providers
+  </Card>
+  <Card title="Docker deployment" icon="docker" href="/guides/docker-deployment">
+    Deploy with failover configuration
+  </Card>
+</CardGroup>

@@ -1,0 +1,110 @@
+---
+title: Semantic search
+description: Search products using natural language queries with AI-powered recommendations
+---
+
+<RequestExample>
+```bash
+curl -X POST https://api.example.com/products/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "I need a laptop for programming",
+    "limit": 5
+  }'
+```
+</RequestExample>
+
+Perform semantic search on products using natural language queries. This endpoint uses vector similarity search with pgvector and Google's Gemini AI to find relevant products and provide intelligent recommendations.
+
+## Request body
+
+<ParamField body="query" type="string" required>
+  Natural language search query describing what the user is looking for
+</ParamField>
+
+<ParamField body="limit" type="integer" default="5">
+  Maximum number of products to return in the search results
+</ParamField>
+
+## Response
+
+<ResponseField name="query" type="string">
+  The original search query submitted by the user
+</ResponseField>
+
+<ResponseField name="recommendation" type="string">
+  AI-generated recommendation text from Google Gemini based on the search results and query context
+</ResponseField>
+
+<ResponseField name="results" type="array">
+  Array of products matching the search query, ordered by semantic similarity
+  
+  <Expandable title="Product object">
+    <ResponseField name="id" type="integer">
+      Unique product identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Product name
+    </ResponseField>
+    
+    <ResponseField name="description" type="string">
+      Product description
+    </ResponseField>
+    
+    <ResponseField name="category" type="string">
+      Product category
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json 200 Success
+{
+  "query": "I need a laptop for programming",
+  "recommendation": "Based on your search for a programming laptop, I recommend the HP Pavilion 15. It features an Intel Core i5 processor and 8GB RAM, which provide good performance for development tasks. The 256GB SSD ensures fast boot times and application loading.",
+  "results": [
+    {
+      "id": 1,
+      "name": "Laptop HP Pavilion 15",
+      "description": "15.6 inch laptop with Intel Core i5, 8GB RAM, 256GB SSD",
+      "category": "Electronics"
+    },
+    {
+      "id": 2,
+      "name": "Dell XPS 13 Developer Edition",
+      "description": "Compact laptop with Intel Core i7, 16GB RAM, optimized for developers",
+      "category": "Electronics"
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## How it works
+
+The semantic search process:
+
+1. **Query embedding**: Your natural language query is converted to a 3072-dimensional vector using Google's Gemini embedding model
+
+2. **Vector similarity**: The query vector is compared against all product embeddings in the database using cosine similarity via pgvector
+
+3. **Result ranking**: Products are ranked by semantic similarity score, not just keyword matching
+
+4. **AI recommendation**: The top results are sent to Google Gemini LLM along with the original query to generate a personalized recommendation
+
+<Note>
+  Unlike traditional keyword search, semantic search understands the meaning and intent behind your query. Searching for "laptop for programming" will match products even if they don't contain those exact words.
+</Note>
+
+## Example queries
+
+Here are some example natural language queries you can use:
+
+- "I need something for gaming"
+- "Looking for professional work clothes"
+- "Want to buy ingredients for Italian cooking"
+- "Need a gift for a tech enthusiast"
+- "Searching for outdoor camping equipment"
+
+The system understands context and intent, returning relevant results even with varied phrasing.

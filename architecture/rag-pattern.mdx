@@ -1,0 +1,382 @@
+---
+title: RAG pattern
+description: Understanding Retrieval-Augmented Generation implementation in SKU Semantic Search
+---
+
+## What is RAG?
+
+Retrieval-Augmented Generation (RAG) is a technique that combines information retrieval with text generation. Instead of relying solely on an LLM's training data, RAG retrieves relevant information from a knowledge base and provides it as context for generation.
+
+<Note>
+  RAG solves a critical problem: **hallucination**. Without RAG, LLMs might recommend products that don't exist or make up features. With RAG, responses are grounded in real database records.
+</Note>
+
+## Why RAG for product search?
+
+Traditional approaches have significant limitations:
+
+<AccordionGroup>
+  <Accordion title="Pure LLM generation (no RAG)">
+    **Problem:** The LLM only knows what was in its training data
+
+    - Can't access your current product catalog
+    - May recommend discontinued products
+    - Invents product names and features
+    - No way to ensure accuracy
+
+    **Example failure:**
+    ```json
+    {
+      "query": "floor cleaner",
+      "response": "I recommend the XYZ Super Clean Max 3000"
+    }
+    ```
+    
+    Problem: This product doesn't exist in your database!
+  </Accordion>
+
+  <Accordion title="Fine-tuned models">
+    **Problem:** Expensive and quickly becomes outdated
+
+    - Requires expensive GPU time for training
+    - Must retrain every time products change
+    - High latency to reflect new products
+    - Risk of overfitting to training data
+
+    Fine-tuning is better for style/tone adaptation than dynamic catalogs.
+  </Accordion>
+
+  <Accordion title="Traditional keyword search">
+    **Problem:** Can't understand semantic meaning
+
+    - Only matches exact keywords
+    - Misses relevant products with different phrasing
+    - Poor handling of synonyms and related concepts
+    - No natural language understanding
+
+    **Example failure:**
+    ```
+    Query: "something to clean the floor"
+    Keyword search: No results (no product contains "something")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## RAG combines the best of both worlds
+
+RAG merges semantic search with constrained generation:
+
+1. **Vector search** finds semantically relevant products
+2. **LLM generation** creates natural, helpful responses
+3. **Context constraint** ensures recommendations only come from retrieved products
+
+## Implementation in SKU Semantic Search
+
+The RAG implementation happens in two phases: retrieval and generation.
+
+### Phase 1: Retrieval
+
+The retrieval phase uses vector embeddings and cosine similarity (`app/services/product_service.py:26`):
+
+```python
+@staticmethod
+def search_products(db: Session, query: str, limit: int = 5):
+    """
+    Search products using vector similarity (cosine distance)
+    """
+    # 1. Get query embedding using Gemini
+    query_embedding = LLMService.get_embedding(query)
+    
+    # 2. Search database using pgvector
+    # Note: .cosine_distance is standard for text embeddings
+    products = db.query(Product).order_by(
+        Product.embedding.cosine_distance(query_embedding)
+    ).limit(limit).all()
+    
+    return products
+```
+
+**Key details:**
+
+- **Embedding model:** Google Gemini `gemini-embedding-001` produces 3072-dimensional vectors
+- **Similarity metric:** Cosine distance measures angular similarity in vector space
+- **Limit:** Returns top N most similar products (default: 5)
+
+<Tip>
+  Cosine distance works better than Euclidean distance for text embeddings because it measures directional similarity, making it invariant to vector magnitude.
+</Tip>
+
+### Phase 2: Generation
+
+Retrieved products are formatted as structured context for the LLM (`app/api/endpoints/products.py:14`):
+
+```python
+@router.post("/search", response_model=SearchResultResponse)
+def search_products(search_data: ProductSearchQuery, db: Session = Depends(get_db)):
+    # 1. Retrieve semantically similar products
+    products_db = ProductService.search_products(
+        db, 
+        search_data.query, 
+        limit=search_data.limit
+    )
+    
+    # 2. Format retrieved products as context
+    context = ". ".join([f"{p.name}: {p.description}" for p in products_db])
+    
+    # 3. Generate answer using RAG
+    ai_recommendation = LLMService.generate_answer(search_data.query, context)
+    
+    return {
+        "query": search_data.query,
+        "recommendation": ai_recommendation,
+        "results": products_db
+    }
+```
+
+The `generate_answer` method constructs a prompt that constrains the LLM (`app/services/llm_service.py:64`):
+
+```python
+@staticmethod
+def generate_answer(query: str, context: str) -> str:
+    prompt = (
+        f"Eres un analista de Listo ERP. Basado en este contexto:\n{context}\n\n"
+        f"Pregunta: {query}\nRespuesta profesional y breve:"
+    )
+
+    for entry in LLMService.LLM_CONFIG:
+        provider = entry["provider"]
+        for model_name in entry["models"]:
+            try:
+                if provider == "google":
+                    res = LLMService._call_google(model_name, prompt)
+                elif provider == "anthropic":
+                    res = LLMService._call_anthropic(model_name, prompt)
+                
+                return f"[{provider.upper()} - {model_name}] {res}"
+            
+            except (APIStatusError, APIConnectionError) as e:
+                print(f"⚠️ Network/status error in {provider} ({model_name}): {e}")
+                continue
+    
+    return "Lo sentimos, el servicio de recomendaciones no está disponible."
+```
+
+**Prompt engineering for RAG:**
+
+- **System role:** Establishes the AI's expertise ("Listo ERP analyst")
+- **Context injection:** Retrieved products are explicitly provided
+- **Instruction clarity:** Requests professional, concise responses
+- **Constraint:** "Based on this context" guides the LLM to use only provided products
+
+## Example RAG workflow
+
+Let's trace a complete request:
+
+<Steps>
+  <Step title="User submits query">
+    ```json
+    {
+      "query": "necesito algo para la caspa",
+      "limit": 3
+    }
+    ```
+
+    Translation: "I need something for dandruff"
+  </Step>
+
+  <Step title="System generates embedding">
+    The query is converted to a 3072-dimensional vector:
+
+    ```python
+    query_embedding = LLMService.get_embedding("necesito algo para la caspa")
+    # Returns: [0.0123, -0.0456, 0.0789, ..., 0.0234]  (3072 values)
+    ```
+  </Step>
+
+  <Step title="Vector search retrieves products">
+    PostgreSQL finds the closest product embeddings:
+
+    ```python
+    products = [
+        {
+            "id": 18,
+            "name": "Shampoo Anticaspa",
+            "description": "Fórmula con piritionato de zinc para cuero cabelludo sensible.",
+            "category": "Cuidado Personal"
+        },
+        {
+            "id": 19,
+            "name": "Acondicionador Hidratante",
+            "description": "Suaviza el cabello y previene el frizz.",
+            "category": "Cuidado Personal"
+        }
+    ]
+    ```
+
+    Note: The system found "Shampoo Anticaspa" even though the query used different words!
+  </Step>
+
+  <Step title="Context is formatted">
+    ```python
+    context = "Shampoo Anticaspa: Fórmula con piritionato de zinc para cuero cabelludo sensible. Acondicionador Hidratante: Suaviza el cabello y previene el frizz."
+    ```
+  </Step>
+
+  <Step title="LLM generates recommendation">
+    The prompt sent to Gemini/Claude:
+
+    ```
+    Eres un analista de Listo ERP. Basado en este contexto:
+    Shampoo Anticaspa: Fórmula con piritionato de zinc para cuero cabelludo sensible. Acondicionador Hidratante: Suaviza el cabello y previene el frizz.
+
+    Pregunta: necesito algo para la caspa
+    Respuesta profesional y breve:
+    ```
+  </Step>
+
+  <Step title="Final response">
+    ```json
+    {
+      "query": "necesito algo para la caspa",
+      "recommendation": "[GOOGLE - models/gemini-2.5-flash] Te recomiendo el Shampoo Anticaspa, que contiene piritionato de zinc, especialmente formulado para tratar la caspa en cuero cabelludo sensible.",
+      "results": [
+        {
+          "id": 18,
+          "name": "Shampoo Anticaspa",
+          "description": "Fórmula con piritionato de zinc para cuero cabelludo sensible.",
+          "category": "Cuidado Personal"
+        },
+        {
+          "id": 19,
+          "name": "Acondicionador Hidratante",
+          "description": "Suaviza el cabello y previene el frizz.",
+          "category": "Cuidado Personal"
+        }
+      ]
+    }
+    ```
+
+    The LLM only recommended products from the retrieved context!
+  </Step>
+</Steps>
+
+## Advantages of this RAG implementation
+
+<CardGroup cols={2}>
+  <Card title="Always current" icon="clock">
+    New products are immediately searchable once their embeddings are created. No retraining required.
+  </Card>
+  <Card title="Factually grounded" icon="anchor">
+    AI can only recommend products that exist in the database, eliminating hallucinations.
+  </Card>
+  <Card title="Semantic understanding" icon="brain">
+    Finds relevant products even with loose or creative phrasing ("algo para la caspa" → "Shampoo Anticaspa").
+  </Card>
+  <Card title="Natural responses" icon="message">
+    LLM generates human-like explanations instead of just returning product IDs.
+  </Card>
+  <Card title="Explainable" icon="magnifying-glass">
+    You can see exactly which products influenced each recommendation.
+  </Card>
+  <Card title="Multilingual" icon="language">
+    Works across languages with appropriate embedding models.
+  </Card>
+</CardGroup>
+
+## RAG best practices
+
+<AccordionGroup>
+  <Accordion title="Chunk size and retrieval limit">
+    **Current setting:** Top 5 products
+
+    ```python
+    limit: int = 5
+    ```
+
+    **Considerations:**
+    - Too few results: May miss relevant products
+    - Too many results: Context window overflow, slower generation
+    - Optimal: 3-10 products for most queries
+
+    Adjust based on your product catalog size and LLM context limits.
+  </Accordion>
+
+  <Accordion title="Prompt engineering">
+    **Current prompt structure:**
+    ```
+    [System role] + [Context] + [Question] + [Instructions]
+    ```
+
+    **Improvements to consider:**
+    - Add few-shot examples of good recommendations
+    - Include structured output formatting instructions
+    - Specify how to handle no-match scenarios
+    - Add business rules (e.g., "prioritize in-stock items")
+  </Accordion>
+
+  <Accordion title="Context formatting">
+    **Current format:** Simple concatenation
+    ```python
+    context = ". ".join([f"{p.name}: {p.description}" for p in products_db])
+    ```
+
+    **Enhanced options:**
+    ```python
+    # Include more structured metadata
+    context = "\n".join([
+        f"Product {i+1}:\n"
+        f"  Name: {p.name}\n"
+        f"  Description: {p.description}\n"
+        f"  Category: {p.category}\n"
+        f"  Price: {p.price}\n"
+        for i, p in enumerate(products_db)
+    ])
+    ```
+  </Accordion>
+
+  <Accordion title="Hybrid search">
+    **Current approach:** Pure vector search
+
+    **Potential enhancement:** Combine vector search with keyword filters
+    ```python
+    # First filter by category, then rank by similarity
+    products = db.query(Product)\
+        .filter(Product.category == "Limpieza")\
+        .order_by(Product.embedding.cosine_distance(query_embedding))\
+        .limit(limit)\
+        .all()
+    ```
+
+    This ensures semantic relevance while respecting business constraints.
+  </Accordion>
+</AccordionGroup>
+
+## Measuring RAG quality
+
+Key metrics to track:
+
+- **Retrieval accuracy:** Are the right products being retrieved?
+- **Response relevance:** Do LLM recommendations make sense?
+- **Hallucination rate:** Does the AI invent products not in context?
+- **User satisfaction:** Do users find what they need?
+
+<Tip>
+  Log retrieved products and generated recommendations to analyze patterns and improve prompt engineering over time.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-LLM failover" icon="shield-halved" href="/architecture/multi-llm-failover">
+    Learn how the system handles LLM provider failures
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    See how RAG fits into the complete system architecture
+  </Card>
+  <Card title="Database setup" icon="database" href="/guides/database-setup">
+    Optimize PostgreSQL and pgvector for RAG workloads
+  </Card>
+  <Card title="Environment setup" icon="gear" href="/guides/environment-setup">
+    Configure API keys and LLM settings
+  </Card>
+</CardGroup>

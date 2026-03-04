@@ -1,0 +1,410 @@
+---
+title: Environment setup
+description: Configure environment variables and API keys for SKU Semantic Search
+---
+
+## Environment variables
+
+SKU Semantic Search uses environment variables for all configuration. This follows the [12-factor app](https://12factor.net/config) methodology for portable, secure deployments.
+
+## Configuration file
+
+Create a `.env` file in the project root with the following variables:
+
+```bash
+# Application metadata
+PROJECT_NAME="SKU Semantic Search"
+VERSION="1.0.0"
+
+# Database configuration
+DATABASE_URL="postgresql://postgres:db_pass@localhost:5435/retail_rag"
+
+# AI provider API keys
+GEMINI_API_KEY="your_gemini_api_key_here"
+ANTHROPIC_API_KEY="your_anthropic_api_key_here"
+
+# JWT authentication
+JWT_SECRET="your_very_secure_random_secret_key"
+ALGORITHM="HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+```
+
+<Warning>
+  Never commit your `.env` file to version control. Add it to `.gitignore` to prevent accidentally exposing secrets.
+</Warning>
+
+## Configuration reference
+
+### Application settings
+
+<ResponseField name="PROJECT_NAME" type="string" default="SKU Semantic Search">
+  Application name displayed in API documentation and responses.
+</ResponseField>
+
+<ResponseField name="VERSION" type="string" default="1.0.0">
+  API version number, displayed in FastAPI docs.
+</ResponseField>
+
+### Database settings
+
+<ResponseField name="DATABASE_URL" type="string" required>
+  PostgreSQL connection string in the format:
+  ```
+  postgresql://[user]:[password]@[host]:[port]/[database]
+  ```
+
+  **Examples:**
+  ```bash
+  # Local development
+  DATABASE_URL="postgresql://postgres:db_pass@localhost:5435/retail_rag"
+
+  # Docker Compose (container-to-container)
+  DATABASE_URL="postgresql://postgres:db_pass@db:5432/retail_rag"
+
+  # Production with SSL
+  DATABASE_URL="postgresql://user:pass@prod-db.example.com:5432/sku_prod?sslmode=require"
+  ```
+
+  <Note>
+    The Docker Compose configuration uses port 5435 externally but 5432 internally to avoid conflicts with local PostgreSQL installations.
+  </Note>
+</ResponseField>
+
+### AI provider settings
+
+<ResponseField name="GEMINI_API_KEY" type="string" required>
+  Google Gemini API key for embeddings and text generation.
+
+  **How to get:**
+  1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+  2. Sign in with your Google account
+  3. Click "Get API key"
+  4. Copy the key (starts with `AI...`)
+
+  **Free tier limits:**
+  - 60 requests per minute
+  - Generous monthly quota for experimentation
+
+  <Tip>
+    Test your key using:
+    ```bash
+    curl "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY"
+    ```
+  </Tip>
+</ResponseField>
+
+<ResponseField name="ANTHROPIC_API_KEY" type="string" required>
+  Anthropic Claude API key for failover text generation.
+
+  **How to get:**
+  1. Visit [Anthropic Console](https://console.anthropic.com/)
+  2. Sign up or sign in
+  3. Navigate to API Keys
+  4. Generate a new key (starts with `sk-ant-...`)
+
+  **Free tier:**
+  Anthropic provides $5 in free credits for testing.
+
+  <Info>
+    While optional for basic operation, this key is essential for high availability. The system falls back to Claude when Gemini is unavailable.
+  </Info>
+</ResponseField>
+
+### Authentication settings
+
+<ResponseField name="JWT_SECRET" type="string" required>
+  Secret key for signing JWT tokens. Must be a strong, random string.
+
+  **Generate a secure secret:**
+  ```bash
+  # Linux/macOS
+  openssl rand -hex 32
+
+  # Python
+  python -c "import secrets; print(secrets.token_hex(32))"
+
+  # Output example:
+  # 5f8d3e9a7b2c1f4e6d8a9b3c5e7f1a4d6b8c9e2f4a5b7c9d1e3f5a7b9c1d3e5f
+  ```
+
+  <Warning>
+    Use a unique, random secret for each environment. Never reuse secrets between development, staging, and production.
+  </Warning>
+</ResponseField>
+
+<ResponseField name="ALGORITHM" type="string" default="HS256">
+  JWT signing algorithm. `HS256` (HMAC with SHA-256) is recommended for symmetric key signing.
+
+  Other options: `HS384`, `HS512`, `RS256` (requires RSA keys)
+</ResponseField>
+
+<ResponseField name="ACCESS_TOKEN_EXPIRE_MINUTES" type="integer" default="30">
+  JWT token expiration time in minutes.
+
+  **Recommendations:**
+  - **Development:** 60-480 minutes (longer sessions for testing)
+  - **Production:** 15-30 minutes (better security)
+  - **Long-lived API tokens:** Consider refresh tokens for extended access
+</ResponseField>
+
+## Loading configuration
+
+The application loads environment variables using Pydantic Settings (`app/core/config.py:3`):
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "SKU Semantic Search"
+    VERSION: str = "1.0.0"
+    
+    # Database and security
+    DATABASE_URL: str
+    GEMINI_API_KEY: str
+    ANTHROPIC_API_KEY: str
+    JWT_SECRET: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = 'utf-8'
+
+# Instantiate settings for use throughout the app
+settings = Settings()
+```
+
+**Key features:**
+
+- **Type validation:** Pydantic ensures variables have correct types
+- **Required fields:** Raises errors if required variables are missing
+- **Default values:** Falls back to defaults for optional settings
+- **Auto-loading:** Automatically reads from `.env` file
+
+## Environment-specific configuration
+
+For multiple environments, use separate `.env` files:
+
+<Tabs>
+  <Tab title="Development">
+    `.env.development`
+    ```bash
+    PROJECT_NAME="SKU Search (Dev)"
+    DATABASE_URL="postgresql://postgres:dev_pass@localhost:5435/retail_rag_dev"
+    GEMINI_API_KEY="AI..."
+    ANTHROPIC_API_KEY="sk-ant-..."
+    JWT_SECRET="dev_secret_not_for_production"
+    ACCESS_TOKEN_EXPIRE_MINUTES=480
+    ```
+
+    Load with:
+    ```bash
+    ln -sf .env.development .env
+    # or
+    cp .env.development .env
+    ```
+  </Tab>
+
+  <Tab title="Production">
+    `.env.production`
+    ```bash
+    PROJECT_NAME="SKU Semantic Search"
+    DATABASE_URL="postgresql://sku_user:strong_password@prod-db:5432/sku_prod?sslmode=require"
+    GEMINI_API_KEY="AI..."
+    ANTHROPIC_API_KEY="sk-ant-..."
+    JWT_SECRET="production_secret_generated_with_openssl_rand_hex_32"
+    ACCESS_TOKEN_EXPIRE_MINUTES=15
+    ```
+
+    <Warning>
+      Use different API keys and secrets for production. Enable SSL for database connections.
+    </Warning>
+  </Tab>
+
+  <Tab title="Docker">
+    For Docker Compose, environment variables can be set in:
+
+    1. **docker-compose.yml** (not recommended for secrets)
+    2. **.env file** (loaded automatically by Docker Compose)
+    3. **Secrets management** (Docker Swarm, Kubernetes)
+
+    Example docker-compose.yml:
+    ```yaml
+    services:
+      api:
+        environment:
+          - DATABASE_URL=postgresql://postgres:db_pass@db:5432/retail_rag
+          - GEMINI_API_KEY=${GEMINI_API_KEY}
+          - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+          - JWT_SECRET=docker_secret_key
+    ```
+
+    The `${GEMINI_API_KEY}` syntax reads from the host's `.env` file.
+  </Tab>
+</Tabs>
+
+## Verifying configuration
+
+To check if your environment is correctly configured:
+
+<Steps>
+  <Step title="Verify .env file exists">
+    ```bash
+    cat .env
+    ```
+
+    Ensure all required variables are present and have values (not placeholders like `your_key_here`).
+  </Step>
+
+  <Step title="Test database connection">
+    ```bash
+    python -c "from app.db.session import engine; print(engine.url)"
+    ```
+
+    Should print your database URL.
+  </Step>
+
+  <Step title="Validate API keys">
+    ```bash
+    python -c "from app.core.config import settings; print('Gemini:', settings.GEMINI_API_KEY[:10], '...'); print('Anthropic:', settings.ANTHROPIC_API_KEY[:10], '...')"
+    ```
+
+    Should print truncated keys (not placeholders).
+  </Step>
+
+  <Step title="Start the application">
+    ```bash
+    uvicorn app.main:app --reload
+    ```
+
+    If configuration is correct, you'll see:
+    ```
+    INFO:     Started server process [12345]
+    INFO:     Waiting for application startup.
+    INFO:     Application startup complete.
+    ```
+  </Step>
+</Steps>
+
+## Security best practices
+
+<AccordionGroup>
+  <Accordion title="API key rotation">
+    Rotate API keys regularly:
+
+    1. Generate new key from provider console
+    2. Update `.env` file
+    3. Restart the application
+    4. Delete old key from provider
+
+    **Recommended frequency:**
+    - Development: Every 90 days
+    - Production: Every 30-60 days
+  </Accordion>
+
+  <Accordion title="Secret management">
+    For production, use dedicated secret management:
+
+    - **AWS:** Secrets Manager, Parameter Store
+    - **GCP:** Secret Manager
+    - **Azure:** Key Vault
+    - **HashiCorp:** Vault
+    - **Kubernetes:** Secrets
+
+    Example with AWS Secrets Manager:
+    ```python
+    import boto3
+
+    def get_secret(secret_name):
+        client = boto3.client('secretsmanager')
+        response = client.get_secret_value(SecretId=secret_name)
+        return response['SecretString']
+
+    settings.GEMINI_API_KEY = get_secret('prod/gemini-api-key')
+    ```
+  </Accordion>
+
+  <Accordion title="Environment variable injection">
+    In containerized environments, inject secrets at runtime:
+
+    ```bash
+    # Docker run
+    docker run -e GEMINI_API_KEY=$GEMINI_API_KEY app
+
+    # Kubernetes
+    kubectl create secret generic api-keys \
+      --from-literal=gemini-key=$GEMINI_API_KEY
+    ```
+
+    This avoids storing secrets in images.
+  </Accordion>
+
+  <Accordion title="Access control">
+    Restrict who can access secrets:
+
+    - Use IAM roles for cloud secrets
+    - Implement RBAC for Kubernetes secrets
+    - Limit file permissions: `chmod 600 .env`
+    - Use separate keys per environment/team
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValidationError: field required">
+    **Cause:** Required environment variable is missing
+
+    **Solution:**
+    1. Check `.env` file exists in project root
+    2. Verify variable name matches exactly (case-sensitive)
+    3. Ensure no quotes around variable names: `GEMINI_API_KEY=value`, not `"GEMINI_API_KEY"=value`
+  </Accordion>
+
+  <Accordion title="API authentication fails">
+    **Cause:** Invalid API key or expired free tier
+
+    **Solution:**
+    1. Regenerate API key from provider console
+    2. Check for leading/trailing whitespace in `.env`
+    3. Verify key hasn't been revoked
+    4. Check billing status if using paid tier
+  </Accordion>
+
+  <Accordion title="Database connection refused">
+    **Cause:** Incorrect DATABASE_URL or PostgreSQL not running
+
+    **Solution:**
+    1. Verify PostgreSQL is running: `docker ps`
+    2. Check port matches Docker Compose config (5435 external)
+    3. For Docker, use service name `db` as host, not `localhost`
+    4. Test connection: `psql $DATABASE_URL`
+  </Accordion>
+
+  <Accordion title="Environment variables not loading">
+    **Cause:** Pydantic can't find `.env` file
+
+    **Solution:**
+    1. Ensure `.env` is in project root (same directory as `app/`)
+    2. Check file is named exactly `.env` (not `.env.txt`)
+    3. Verify UTF-8 encoding: `file .env` should show `UTF-8`
+    4. Try absolute path in Config: `env_file = "/path/to/.env"`
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Database setup" icon="database" href="/guides/database-setup">
+    Configure PostgreSQL with pgvector
+  </Card>
+  <Card title="Docker deployment" icon="docker" href="/guides/docker-deployment">
+    Deploy using Docker Compose
+  </Card>
+  <Card title="Multi-LLM failover" icon="shield-halved" href="/architecture/multi-llm-failover">
+    Configure multiple AI providers
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Complete installation guide
+  </Card>
+</CardGroup>

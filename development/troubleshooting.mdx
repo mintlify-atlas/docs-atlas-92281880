@@ -1,0 +1,360 @@
+---
+title: Troubleshooting
+description: Common issues and solutions when developing with SKU Semantic Search
+---
+
+This guide helps you diagnose and resolve common issues when working with the SKU Semantic Search application.
+
+## Database issues
+
+<Accordion title="Connection refused or database not available">
+  **Symptoms:**
+  - Application fails to start
+  - Error: `connection refused` or `could not connect to server`
+  
+  **Solutions:**
+  
+  1. **Verify Docker container is running:**
+     ```bash
+     docker ps
+     ```
+     You should see a PostgreSQL container running. If not, start it:
+     ```bash
+     docker-compose up -d db
+     ```
+  
+  2. **Check DATABASE_URL configuration:**
+     - Verify the connection string format: `postgresql://user:pass@host:port/database`
+     - Confirm the port matches your Docker configuration (default: 5435)
+     - Ensure credentials match your docker-compose.yml
+  
+  3. **Test database connectivity:**
+     ```bash
+     psql postgresql://user:password@localhost:5435/skudb
+     ```
+  
+  4. **Check Docker logs:**
+     ```bash
+     docker-compose logs db
+     ```
+</Accordion>
+
+<Accordion title="pgvector extension not found">
+  **Symptoms:**
+  - Error: `type "vector" does not exist`
+  - Error: `extension "vector" does not exist`
+  
+  **Solutions:**
+  
+  1. **Verify pgvector is installed:**
+     Connect to your database and run:
+     ```sql
+     SELECT * FROM pg_extension WHERE extname = 'vector';
+     ```
+  
+  2. **Create the extension:**
+     The application attempts to create it automatically in `app/main.py`, but you can create it manually:
+     ```sql
+     CREATE EXTENSION IF NOT EXISTS vector;
+     ```
+  
+  3. **Use the correct Docker image:**
+     Ensure your `docker-compose.yml` uses a PostgreSQL image with pgvector:
+     ```yaml
+     image: ankane/pgvector:latest
+     ```
+     
+  <Note>
+    The extension must be created before running migrations or creating tables with vector columns.
+  </Note>
+</Accordion>
+
+<Accordion title="Vector dimension mismatch">
+  **Symptoms:**
+  - Error: `expected 3072 dimensions, not X`
+  
+  **Solutions:**
+  
+  The Gemini embedding model produces 3072-dimensional vectors. Ensure:
+  
+  1. Your database schema defines vector columns as `vector(3072)`
+  2. You're using the correct embedding model: `gemini-embedding-001`
+  3. You haven't mixed embeddings from different models
+  
+  If you need to change embedding models, you must:
+  1. Drop existing embeddings
+  2. Update the vector column dimension
+  3. Regenerate all embeddings
+</Accordion>
+
+## API key and authentication issues
+
+<Accordion title="Invalid or missing API keys">
+  **Symptoms:**
+  - Error: `API key not valid`
+  - Error: `401 Unauthorized` from AI providers
+  - Application startup validation error
+  
+  **Solutions:**
+  
+  1. **Verify API keys are set:**
+     ```bash
+     # Check if variables are loaded
+     python -c "from app.core.config import settings; print(settings.GEMINI_API_KEY[:10])"
+     ```
+  
+  2. **Validate API keys:**
+     - **Gemini:** Visit [Google AI Studio](https://makersuite.google.com/app/apikey) and verify your key
+     - **Anthropic:** Visit [Anthropic Console](https://console.anthropic.com/) and check your key status
+  
+  3. **Check for whitespace or quotes:**
+     In your `.env` file, ensure no extra spaces or quotes:
+     ```bash
+     # Wrong
+     GEMINI_API_KEY = " key_here "
+     
+     # Correct
+     GEMINI_API_KEY=key_here
+     ```
+  
+  4. **Regenerate keys if necessary:**
+     If keys are compromised or invalid, generate new ones from the respective consoles.
+</Accordion>
+
+<Accordion title="JWT token errors">
+  **Symptoms:**
+  - Error: `Could not validate credentials`
+  - Error: `Signature verification failed`
+  - Users unexpectedly logged out
+  
+  **Solutions:**
+  
+  1. **Verify JWT_SECRET is set:**
+     ```bash
+     python -c "from app.core.config import settings; print(len(settings.JWT_SECRET))"
+     ```
+     Should return a number > 16 (ideally 32+)
+  
+  2. **Check for secret rotation:**
+     If you changed `JWT_SECRET`, all existing tokens become invalid. Users must log in again.
+  
+  3. **Verify token expiration:**
+     Check `ACCESS_TOKEN_EXPIRE_MINUTES` setting. Tokens expire after this duration.
+  
+  4. **Test token generation:**
+     ```python
+     from app.core.security import Security
+     token = Security.create_access_token({"sub": "test@example.com"})
+     print(token)
+     ```
+</Accordion>
+
+## LLM and embedding issues
+
+<Accordion title="LLM failover not working">
+  **Symptoms:**
+  - Application crashes when Gemini fails
+  - No automatic fallback to Claude
+  - Error messages about unavailable services
+  
+  **Solutions:**
+  
+  1. **Verify both API keys are configured:**
+     ```bash
+     python -c "from app.core.config import settings; print('Gemini:', bool(settings.GEMINI_API_KEY)); print('Anthropic:', bool(settings.ANTHROPIC_API_KEY))"
+     ```
+  
+  2. **Check LLM service configuration:**
+     The failover hierarchy is defined in `app/services/llm_service.py:13-26`. Verify the configuration:
+     - Google models are tried first
+     - Anthropic models are fallback
+  
+  3. **Review error handling:**
+     The service catches `APIStatusError` and `APIConnectionError`. Other exceptions may not trigger failover.
+  
+  4. **Check application logs:**
+     Look for warning messages indicating failover attempts:
+     ```
+     ⚠️ Error de red/status en google (models/gemini-2.5-flash): ...
+     ```
+  
+  <Info>
+    Failover only occurs during answer generation. Embeddings always use Gemini and do not have a fallback.
+  </Info>
+</Accordion>
+
+<Accordion title="Embedding generation fails">
+  **Symptoms:**
+  - Error: `Error al generar embedding`
+  - Search returns no results
+  - Products cannot be indexed
+  
+  **Solutions:**
+  
+  1. **Verify Gemini API key:**
+     Embeddings require a valid `GEMINI_API_KEY`. There is no fallback.
+  
+  2. **Check API quota:**
+     You may have exceeded your free tier quota. Check [Google AI Studio usage](https://makersuite.google.com/).
+  
+  3. **Validate input text:**
+     - Text should not be empty
+     - Very long text (>10,000 characters) may fail
+     - Special characters are handled, but extreme cases may cause issues
+  
+  4. **Test embedding generation directly:**
+     ```python
+     from app.services.llm_service import LLMService
+     embedding = LLMService.get_embedding("test product")
+     print(f"Embedding dimension: {len(embedding)}")
+     ```
+     Should output: `Embedding dimension: 3072`
+</Accordion>
+
+<Accordion title="Rate limiting or quota exceeded">
+  **Symptoms:**
+  - Error: `429 Too Many Requests`
+  - Error: `Quota exceeded`
+  - Intermittent failures during high usage
+  
+  **Solutions:**
+  
+  1. **Check quota usage:**
+     - **Gemini:** [Google AI Studio](https://makersuite.google.com/)
+     - **Anthropic:** [Console Usage](https://console.anthropic.com/)
+  
+  2. **Implement caching:**
+     Cache embeddings and LLM responses to reduce API calls:
+     - Store embeddings in database (already done for products)
+     - Cache search results for common queries
+     - Use Redis or similar for response caching
+  
+  3. **Upgrade your plan:**
+     Consider upgrading to paid tiers for higher quotas.
+  
+  4. **Implement rate limiting:**
+     Add rate limiting to your API endpoints to control request volume.
+  
+  <Warning>
+    Free tier quotas are typically very limited. Production deployments should use paid plans with appropriate quotas.
+  </Warning>
+</Accordion>
+
+## Development environment issues
+
+<Accordion title="Import errors or missing dependencies">
+  **Symptoms:**
+  - Error: `ModuleNotFoundError: No module named 'X'`
+  - Import errors when starting the application
+  
+  **Solutions:**
+  
+  1. **Verify virtual environment is activated:**
+     ```bash
+     which python
+     # Should point to your venv/bin/python
+     ```
+  
+  2. **Install dependencies:**
+     ```bash
+     pip install -r requirements.txt
+     ```
+  
+  3. **Check Python version:**
+     The project requires Python 3.13+:
+     ```bash
+     python --version
+     ```
+  
+  4. **Reinstall dependencies:**
+     If issues persist, recreate the virtual environment:
+     ```bash
+     rm -rf venv
+     python -m venv venv
+     source venv/bin/activate
+     pip install -r requirements.txt
+     ```
+</Accordion>
+
+<Accordion title="CORS errors in browser">
+  **Symptoms:**
+  - Error: `Access to fetch at ... has been blocked by CORS policy`
+  - Frontend cannot connect to API
+  
+  **Solutions:**
+  
+  1. **Verify CORS configuration:**
+     Check `app/main.py:17-23` for CORS middleware settings.
+  
+  2. **Add your frontend origin:**
+     Update `allow_origins` to include your frontend URL:
+     ```python
+     allow_origins=[
+         "http://localhost:4200",  # Angular default
+         "http://localhost:3000",  # React default
+         "http://localhost:5173",  # Vite default
+     ],
+     ```
+  
+  3. **For development, allow all origins:**
+     ```python
+     allow_origins=["*"],
+     ```
+     
+  <Warning>
+    Never use `allow_origins=["*"]` in production. Specify exact origins for security.
+  </Warning>
+</Accordion>
+
+<Accordion title="Application won't start or crashes immediately">
+  **Symptoms:**
+  - Application exits immediately after starting
+  - Validation errors on startup
+  - Cryptic error messages
+  
+  **Solutions:**
+  
+  1. **Check for configuration errors:**
+     Most startup failures are due to missing or invalid configuration:
+     ```bash
+     python -c "from app.core.config import settings"
+     ```
+     This will show validation errors clearly.
+  
+  2. **Verify database connection:**
+     Test the database before starting the app:
+     ```bash
+     psql $DATABASE_URL -c "SELECT 1;"
+     ```
+  
+  3. **Check for port conflicts:**
+     If port 8000 is in use:
+     ```bash
+     lsof -i :8000
+     # Kill the process or use a different port
+     uvicorn app.main:app --port 8001
+     ```
+  
+  4. **Review application logs:**
+     Run with verbose logging:
+     ```bash
+     uvicorn app.main:app --reload --log-level debug
+     ```
+</Accordion>
+
+## Getting help
+
+If you encounter issues not covered here:
+
+1. **Check application logs:** Most errors include detailed stack traces
+2. **Enable debug mode:** Set `--log-level debug` when running uvicorn
+3. **Verify configuration:** Use the configuration validation script
+4. **Test components individually:** Isolate the failing component (database, LLM, auth)
+
+<Tip>
+  When reporting issues, include:
+  - Error message and full stack trace
+  - Configuration (with secrets redacted)
+  - Steps to reproduce
+  - Python and dependency versions
+</Tip>
